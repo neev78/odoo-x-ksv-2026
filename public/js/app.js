@@ -591,7 +591,7 @@ const App = {
     
     try {
       await VB.put('/rfqs/' + rfqId, { status: newStatus });
-      VB.toast(\`RFQ moved to \${newStatus}\`);
+      VB.toast(`RFQ moved to ${newStatus}`);
       rfq.status = newStatus;
       
       // Re-render
