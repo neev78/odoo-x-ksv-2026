@@ -8,13 +8,15 @@ const LIGHT = '#f1f5f9';
 const inr = (n) =>
   'Rs. ' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+const QRCode = require('qrcode');
+
 /**
  * Build a PDF document (Purchase Order or Invoice) and pipe it to `stream`.
  * @param {'PO'|'INVOICE'} kind
  * @param {object} data  populated PO or Invoice document (with vendor populated)
  * @param {stream.Writable} stream
  */
-function generateDocument(kind, data, stream) {
+async function generateDocument(kind, data, stream) {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   doc.pipe(stream);
 
@@ -59,8 +61,19 @@ function generateDocument(kind, data, stream) {
   doc.text(`GST: ${vendor.gstNumber || '-'}`, 50, y + 62);
   if (vendor.address) doc.text(`Address: ${vendor.address}`, 50, y + 76, { width: 480 });
 
+  // ---- QR Code Generation ----
+  try {
+    const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
+    const verifyUrl = `${baseUrl}/api/verify/${kind.toLowerCase()}/${data._id}`;
+    const qrImage = await QRCode.toDataURL(verifyUrl, { width: 100, margin: 1 });
+    doc.image(qrImage, doc.page.width - 150, y, { width: 100 });
+    doc.fontSize(8).fillColor(GREY).text('Scan to Verify', doc.page.width - 150, y + 105, { width: 100, align: 'center' });
+  } catch (err) {
+    console.error('QR Generation failed:', err);
+  }
+
   // ---- Items table ----
-  y += 110;
+  y += 130;
   const tableTop = y;
   const cols = { item: 50, qty: 290, rate: 360, amount: 460 };
 

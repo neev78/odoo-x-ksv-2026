@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getQuotations, compareQuotations, createQuotation, updateQuotation, deleteQuotation,
+  getQuotations, compareQuotations, getAiInsights, createQuotation, updateQuotation, deleteQuotation,
 } = require('../controllers/quotationController');
 const { protect, authorize } = require('../middleware/auth');
 
 router.get('/compare/:rfqId', protect, compareQuotations);
+router.get('/compare/:rfqId/ai-insights', protect, getAiInsights);
 
 router.route('/')
   .get(protect, getQuotations)

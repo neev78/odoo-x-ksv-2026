@@ -85,7 +85,7 @@ const downloadInvoicePdf = asyncHandler(async (req, res) => {
   if (!invoice) throw AppError.notFound('Invoice not found');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="${invoice.invoiceNumber}.pdf"`);
-  generateDocument('INVOICE', invoice, res);
+  await generateDocument('INVOICE', invoice, res);
 });
 
 // @route POST /api/invoices/:id/email
@@ -95,13 +95,17 @@ const emailInvoice = asyncHandler(async (req, res) => {
   const to = req.body.to || (invoice.vendor && invoice.vendor.email);
   if (!to) throw AppError.badRequest('No recipient email available');
 
-  const buffer = await new Promise((resolve, reject) => {
+  const buffer = await new Promise(async (resolve, reject) => {
     const stream = new PassThrough();
     const chunks = [];
     stream.on('data', (c) => chunks.push(c));
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
-    generateDocument('INVOICE', invoice, stream);
+    try {
+      await generateDocument('INVOICE', invoice, stream);
+    } catch(err) {
+      reject(err);
+    }
   });
 
   const result = await sendEmail({

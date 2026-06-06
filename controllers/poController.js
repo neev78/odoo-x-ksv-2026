@@ -57,7 +57,40 @@ const generatePO = asyncHandler(async (req, res) => {
 
   await logActivity({ user: req.user, action: 'PO Generated', description: `Generated ${po.poNumber}`, entityType: 'PurchaseOrder', entityId: po.poNumber });
   await notify({ roles: ['Vendor', 'Admin'], title: 'Purchase Order Issued', message: `${po.poNumber} issued`, type: 'General' });
-  const populated = await po.populate('vendor', 'companyName vendorId');
+  
+  const populated = await PurchaseOrder.findById(po._id).populate('vendor', 'companyName vendorId gstNumber email phone address').populate('rfq');
+
+  // Send Email with PDF attachment
+  try {
+    const { sendEmail } = require('../utils/email');
+    const { poIssuedTemplate } = require('../utils/emailTemplates');
+    
+    // Generate PDF buffer
+    const chunks = [];
+    const stream = require('stream').PassThrough();
+    const pdfPromise = new Promise(async (resolve, reject) => {
+      stream.on('data', (c) => chunks.push(c));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
+      try {
+        await generateDocument('PO', populated, stream);
+      } catch (err) {
+        reject(err);
+      }
+    });
+    const pdfBuffer = await pdfPromise;
+
+    const html = poIssuedTemplate(populated.vendor.companyName, populated.poNumber, populated.totalAmount);
+    await sendEmail({
+      to: populated.vendor.email,
+      subject: `Purchase Order Issued: ${populated.poNumber}`,
+      html: html,
+      attachments: [{ filename: `${populated.poNumber}.pdf`, content: pdfBuffer }]
+    });
+  } catch (err) {
+    console.error('Failed to send PO email:', err);
+  }
+
   res.status(201).json({ success: true, data: populated });
 });
 
@@ -75,7 +108,7 @@ const downloadPOPdf = asyncHandler(async (req, res) => {
   if (!po) throw AppError.notFound('Purchase Order not found');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="${po.poNumber}.pdf"`);
-  generateDocument('PO', po, res);
+  await generateDocument('PO', po, res);
 });
 
 module.exports = { getPurchaseOrders, getPurchaseOrder, generatePO, updatePO, downloadPOPdf };

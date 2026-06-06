@@ -50,6 +50,8 @@ app.use('/api/invoices', require('./routes/invoiceRoutes'));
 app.use('/api/dashboard', require('./routes/dashboardRoutes'));
 app.use('/api/activities', require('./routes/activityRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
+app.use('/api/verify', require('./routes/verifyRoutes'));
+app.use('/api/chat', require('./routes/chatRoutes'));
 
 // ---- Metadata (enums used to populate dropdowns) ----
 // Values are imported from the shared constants file — single source of truth.

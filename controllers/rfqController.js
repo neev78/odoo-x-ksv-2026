@@ -52,6 +52,28 @@ const getRFQ = asyncHandler(async (req, res) => {
   res.json({ success: true, data: rfq });
 });
 
+async function sendRfqEmails(rfqDoc) {
+  try {
+    const { sendEmail } = require('../utils/email');
+    const { rfqAssignmentTemplate } = require('../utils/emailTemplates');
+    const rfq = await RFQ.findById(rfqDoc._id).populate('assignedVendors');
+    if (!rfq || !rfq.assignedVendors || rfq.assignedVendors.length === 0) return;
+    
+    for (const vendor of rfq.assignedVendors) {
+      if (vendor.email) {
+        const html = rfqAssignmentTemplate(vendor.companyName, rfq.rfqNumber, rfq.title, rfq.deadline);
+        await sendEmail({
+          to: vendor.email,
+          subject: `New Request for Quotation: ${rfq.rfqNumber}`,
+          html: html
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Failed to send RFQ emails:', err);
+  }
+}
+
 // @route POST /api/rfqs
 const createRFQ = asyncHandler(async (req, res) => {
   const payload = { ...req.body, createdBy: req.user._id };
@@ -60,6 +82,7 @@ const createRFQ = asyncHandler(async (req, res) => {
   await logActivity({ user: req.user, action: 'RFQ Created', description: `Created RFQ ${rfq.rfqNumber} - ${rfq.title}`, entityType: 'RFQ', entityId: rfq.rfqNumber });
   if (rfq.status === 'Sent' || rfq.status === 'Open') {
     await notify({ roles: ['Vendor'], title: 'New RFQ Available', message: `${rfq.rfqNumber}: ${rfq.title}`, type: 'New RFQ' });
+    sendRfqEmails(rfq); // Async email send
   }
   res.status(201).json({ success: true, data: rfq });
 });
@@ -79,6 +102,7 @@ const updateRFQ = asyncHandler(async (req, res) => {
   await logActivity({ user: req.user, action: 'RFQ Updated', description: `Updated RFQ ${rfq.rfqNumber}`, entityType: 'RFQ', entityId: rfq.rfqNumber });
   if (prevStatus === 'Draft' && (rfq.status === 'Sent' || rfq.status === 'Open')) {
     await notify({ roles: ['Vendor'], title: 'New RFQ Available', message: `${rfq.rfqNumber}: ${rfq.title}`, type: 'New RFQ' });
+    sendRfqEmails(rfq); // Async email send
   }
   res.json({ success: true, data: rfq });
 });

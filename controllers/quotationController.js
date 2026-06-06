@@ -121,4 +121,59 @@ const deleteQuotation = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Quotation deleted' });
 });
 
-module.exports = { getQuotations, compareQuotations, createQuotation, updateQuotation, deleteQuotation };
+// @route GET /api/quotations/compare/:rfqId/ai-insights
+// AI Smart Suggestion logic
+const getAiInsights = asyncHandler(async (req, res) => {
+  const rfq = await RFQ.findById(req.params.rfqId).lean();
+  if (!rfq) throw AppError.notFound('RFQ not found');
+
+  const quotations = await Quotation.find({ rfq: req.params.rfqId })
+    .populate('vendor', 'companyName vendorId rating performanceScore')
+    .lean();
+
+  if (quotations.length === 0) {
+    return res.json({ success: true, insight: 'No quotations available to analyze.', recommendationId: null });
+  }
+  if (quotations.length === 1) {
+    return res.json({ success: true, insight: 'Only one quotation received. No comparison available.', recommendationId: quotations[0]._id });
+  }
+
+  // Find min/max for normalization
+  const maxPrice = Math.max(...quotations.map(q => q.totalAmount));
+  const minPrice = Math.min(...quotations.map(q => q.totalAmount));
+  
+  const maxTime = Math.max(...quotations.map(q => q.deliveryTimeline));
+  const minTime = Math.min(...quotations.map(q => q.deliveryTimeline));
+
+  let bestScore = -1;
+  let bestQuote = null;
+  let cheapestQuote = quotations.find(q => q.totalAmount === minPrice);
+
+  quotations.forEach(q => {
+    // Normalize (0 to 1). Lower price is better, lower time is better, higher rating is better
+    const priceScore = maxPrice === minPrice ? 1 : 1 - ((q.totalAmount - minPrice) / (maxPrice - minPrice));
+    const timeScore = maxTime === minTime ? 1 : 1 - ((q.deliveryTimeline - minTime) / (maxTime - minTime));
+    const ratingScore = ((q.vendor?.rating || 0) / 5);
+
+    // Weighted Score: 50% Price, 30% Rating, 20% Speed
+    const score = (priceScore * 0.5) + (ratingScore * 0.3) + (timeScore * 0.2);
+    q.aiScore = score;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestQuote = q;
+    }
+  });
+
+  let insight = '';
+  if (bestQuote._id === cheapestQuote._id) {
+    insight = `✨ **AI Recommendation:** **${bestQuote.vendor.companyName}** is the smartest choice. They offer the absolute lowest price (₹${bestQuote.totalAmount.toLocaleString('en-IN')}) while maintaining a solid rating of ${bestQuote.vendor.rating}/5.0 and delivering in ${bestQuote.deliveryTimeline} days.`;
+  } else {
+    const priceDiff = bestQuote.totalAmount - cheapestQuote.totalAmount;
+    insight = `✨ **AI Recommendation:** **${bestQuote.vendor.companyName}** provides the best overall value. Although they are ₹${priceDiff.toLocaleString('en-IN')} more expensive than the cheapest bid, their excellent ${bestQuote.vendor.rating}/5.0 rating and fast ${bestQuote.deliveryTimeline}-day delivery timeline significantly reduces procurement risk.`;
+  }
+
+  res.json({ success: true, insight, recommendationId: bestQuote._id, scores: quotations.map(q => ({ id: q._id, score: q.aiScore })) });
+});
+
+module.exports = { getQuotations, compareQuotations, getAiInsights, createQuotation, updateQuotation, deleteQuotation };

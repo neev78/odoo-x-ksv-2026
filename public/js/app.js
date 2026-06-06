@@ -112,19 +112,55 @@ const App = {
       const res = await VB.request('GET', url);
       const blob = await res.blob();
       const objUrl = URL.createObjectURL(blob);
-      if (mode === 'download') {
-        const a = document.createElement('a');
-        a.href = objUrl; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-      } else {
+      
+      if (mode === 'print') {
         const w = window.open(objUrl, '_blank');
-        if (mode === 'print' && w) w.onload = () => setTimeout(() => w.print(), 300);
+        if (w) w.onload = () => setTimeout(() => w.print(), 300);
+        setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+        return;
       }
-      setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+
+      // Show in Preview Modal
+      document.getElementById('vbModalTitle').innerHTML = `<i class="bi bi-file-earmark-pdf text-danger"></i> Document Preview`;
+      document.getElementById('vbModalBody').innerHTML = `
+        <iframe src="${objUrl}#toolbar=0" style="width: 100%; height: 65vh; border-radius: 8px; border: 1px solid var(--vb-border);" frameborder="0"></iframe>
+      `;
+      document.getElementById('vbModalFooter').innerHTML = `
+        <button class="btn btn-light" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-primary" onclick="const a=document.createElement('a');a.href='${objUrl}';a.download='${filename}';a.click();"><i class="bi bi-download"></i> Download PDF</button>
+      `;
+      const modal = new bootstrap.Modal(document.getElementById('vbModal'));
+      
+      // Cleanup object URL when modal closes
+      document.getElementById('vbModal').addEventListener('hidden.bs.modal', function cleanup() {
+        URL.revokeObjectURL(objUrl);
+        document.getElementById('vbModal').removeEventListener('hidden.bs.modal', cleanup);
+      });
+      
+      modal.show();
     } catch (e) { VB.toast(e.message, 'error'); }
   },
 
   formVal(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; },
   emptyState(icon, text) { return `<div class="empty"><i class="bi ${icon}"></i><p class="mt-2">${text}</p></div>`; },
+
+  exportCSV(filename, rows) {
+    if (!rows || !rows.length) return VB.toast('No data to export', 'error');
+    const keys = Object.keys(rows[0]);
+    const csvContent = [
+      keys.join(','),
+      ...rows.map(row => keys.map(k => `"${String(row[k] || '').replace(/"/g, '""')}"`).join(','))
+    ].join('\\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  },
 
   // ================================================================ DASHBOARD
   async render_dashboard() {
@@ -329,7 +365,8 @@ const App = {
           <select class="form-select" style="max-width:160px" id="vStatus" onchange="App.filterVendors()">
             <option value="">All Status</option>${sts.map((c) => `<option>${c}</option>`).join('')}
           </select>
-          <div class="ms-auto">
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-outline-success" onclick="App.exportCSV('vendors.csv', App.state.vendors)"><i class="bi bi-file-earmark-spreadsheet"></i> Export</button>
             ${canEdit ? '<button class="btn btn-primary" onclick="App.vendorForm()"><i class="bi bi-plus-lg"></i> Add Vendor</button>' : ''}
           </div>
         </div>
@@ -436,13 +473,26 @@ const App = {
           <select class="form-select" style="max-width:170px" id="rStatus" onchange="App.filterRFQs()">
             <option value="">All Status</option>${sts.map((c) => `<option>${c}</option>`).join('')}
           </select>
-          <div class="ms-auto">${canManage ? '<button class="btn btn-primary" onclick="App.rfqForm()"><i class="bi bi-plus-lg"></i> New RFQ</button>' : ''}</div>
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-outline-success" onclick="App.exportCSV('rfqs.csv', App.state.rfqs)"><i class="bi bi-file-earmark-spreadsheet"></i> Export</button>
+            <div class="btn-group">
+              <button class="btn btn-outline-secondary ${this.state.rfqView !== 'kanban' ? 'active' : ''}" onclick="App.state.rfqView='list';App.render_rfqs()"><i class="bi bi-list-ul"></i></button>
+              <button class="btn btn-outline-secondary ${this.state.rfqView === 'kanban' ? 'active' : ''}" onclick="App.state.rfqView='kanban';App.render_rfqs()"><i class="bi bi-kanban"></i></button>
+            </div>
+            ${canManage ? '<button class="btn btn-primary" onclick="App.rfqForm()"><i class="bi bi-plus-lg"></i> New RFQ</button>' : ''}
+          </div>
         </div>
+        ${this.state.rfqView === 'kanban' ? `<div id="rfqKanbanBoard" class="d-flex gap-3 overflow-x-auto pb-3" style="min-height: 60vh;"></div>` : `
         <div class="table-wrap"><table class="table"><thead><tr>
           <th>RFQ #</th><th>Title</th><th>Product</th><th>Qty</th><th>Deadline</th><th>Vendors</th><th>Status</th><th class="text-end">Actions</th>
         </tr></thead><tbody id="rfqRows"></tbody></table></div>
+        `}
       `);
-      this.renderRFQRows(rfqs, canManage, isVendor);
+      if (this.state.rfqView === 'kanban') {
+        this.renderRFQKanban(rfqs, canManage, isVendor);
+      } else {
+        this.renderRFQRows(rfqs, canManage, isVendor);
+      }
     } catch (e) { this.view(this.emptyState('bi-exclamation-triangle', e.message)); }
   },
 
@@ -472,7 +522,85 @@ const App = {
     const q = this.formVal('rSearch').toLowerCase(); const st = this.formVal('rStatus');
     const f = this.state.rfqs.filter((r) => (!st || r.status === st) &&
       (!q || (r.rfqNumber + r.title + r.productName).toLowerCase().includes(q)));
-    this.renderRFQRows(f, this.can(['Admin', 'Procurement Officer']), this.user.role === 'Vendor');
+    if (this.state.rfqView === 'kanban') {
+      this.renderRFQKanban(f, this.can(['Admin', 'Procurement Officer']), this.user.role === 'Vendor');
+    } else {
+      this.renderRFQRows(f, this.can(['Admin', 'Procurement Officer']), this.user.role === 'Vendor');
+    }
+  },
+
+  renderRFQKanban(rfqs, canManage, isVendor) {
+    const el = document.getElementById('rfqKanbanBoard');
+    if (!el) return;
+    
+    // Define the columns/statuses we want in the board
+    const columns = ['Draft', 'Sent', 'Open', 'Closed', 'Approved', 'Rejected'];
+    
+    let html = '';
+    columns.forEach(status => {
+      const colRfqs = rfqs.filter(r => r.status === status);
+      
+      html += `
+        <div class="kanban-col bg-light rounded p-2" style="min-width: 300px; width: 300px; flex-shrink: 0; display: flex; flex-direction: column;" 
+             ondragover="event.preventDefault(); this.classList.add('bg-secondary', 'bg-opacity-10')" 
+             ondragleave="this.classList.remove('bg-secondary', 'bg-opacity-10')" 
+             ondrop="event.preventDefault(); this.classList.remove('bg-secondary', 'bg-opacity-10'); App.dropRFQ(event, '${status}')">
+          <div class="d-flex justify-content-between align-items-center mb-3 px-1">
+            <h6 class="mb-0 fw-bold">${status}</h6>
+            <span class="badge bg-secondary rounded-pill">${colRfqs.length}</span>
+          </div>
+          <div class="kanban-cards d-flex flex-column gap-2" style="flex-grow: 1;">
+            ${colRfqs.map(r => `
+              <div class="card shadow-sm cursor-pointer border-0 kanban-card" 
+                   draggable="${canManage ? 'true' : 'false'}" 
+                   ondragstart="event.dataTransfer.setData('text/plain', '${r._id}'); event.target.classList.add('opacity-50')"
+                   ondragend="event.target.classList.remove('opacity-50')"
+                   onclick="App.viewRFQ('${r._id}')">
+                <div class="card-body p-3">
+                  <div class="d-flex justify-content-between mb-2">
+                    <span class="badge bg-primary bg-opacity-10 text-primary border-0">${VB.escape(r.rfqNumber)}</span>
+                    <span class="text-muted small"><i class="bi bi-clock"></i> ${VB.date(r.deadline)}</span>
+                  </div>
+                  <h6 class="card-title mb-1 fw-semibold">${VB.escape(r.title)}</h6>
+                  <p class="card-text text-muted small mb-2 text-truncate">${VB.escape(r.productName)}</p>
+                  
+                  <div class="d-flex justify-content-between align-items-center mt-3 pt-2 border-top">
+                    <span class="badge bg-light text-dark border"><i class="bi bi-people"></i> ${(r.assignedVendors || []).length}</span>
+                    <div class="btn-group" onclick="event.stopPropagation()">
+                      ${this.can(['Admin', 'Procurement Officer', 'Manager']) ? `<button class="btn btn-sm btn-light py-0 px-2" onclick="App.go('comparison');setTimeout(()=>App.loadComparison('${r._id}'),300)" title="Compare Quotes"><i class="bi bi-bar-chart-steps"></i></button>` : ''}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+            ${colRfqs.length === 0 ? `<div class="p-3 text-center text-muted small border border-dashed rounded bg-white">Drop RFQs here</div>` : ''}
+          </div>
+        </div>
+      `;
+    });
+    
+    el.innerHTML = html;
+  },
+
+  async dropRFQ(e, newStatus) {
+    const rfqId = e.dataTransfer.getData('text/plain');
+    if (!rfqId) return;
+    
+    const rfq = this.state.rfqs.find(r => r._id === rfqId);
+    if (!rfq || rfq.status === newStatus) return;
+    
+    try {
+      await VB.put('/rfqs/' + rfqId, { status: newStatus });
+      VB.toast(\`RFQ moved to \${newStatus}\`);
+      rfq.status = newStatus;
+      
+      // Re-render
+      if (this.state.rfqView === 'kanban') {
+        this.renderRFQKanban(this.state.rfqs, this.can(['Admin', 'Procurement Officer']), this.user.role === 'Vendor');
+      }
+    } catch (err) {
+      VB.toast(err.message, 'error');
+    }
   },
 
   async rfqForm(id) {
@@ -691,12 +819,34 @@ const App = {
     if (box) box.innerHTML = '<div class="spinner-wrap"><div class="spinner-border text-primary"></div></div>';
     try {
       const res = await VB.get(`/quotations/compare/${rfqId}`);
+      const aiRes = await VB.get(`/quotations/compare/${rfqId}/ai-insights`).catch(() => null);
+      
       const { rfq, data: quotes, highlights } = res;
       const canApprove = this.can(['Admin', 'Manager']);
       const canManage = this.can(['Admin', 'Procurement Officer']);
       if (!quotes.length) { box.innerHTML = this.emptyState('bi-inbox', 'No quotations submitted for this RFQ yet.'); return; }
 
+      let aiCardHtml = '';
+      if (aiRes && aiRes.insight) {
+        // Convert markdown bold (**text**) to HTML <strong>
+        const formattedInsight = aiRes.insight.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        aiCardHtml = `
+          <div class="card mb-3 border-info bg-info bg-opacity-10">
+            <div class="card-body">
+              <div class="d-flex gap-3 align-items-center">
+                <div class="fs-1 text-info"><i class="bi bi-robot"></i></div>
+                <div>
+                  <h6 class="text-info mb-1 fw-bold">AI Smart Suggestion</h6>
+                  <p class="mb-0 text-dark">${formattedInsight}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
       box.innerHTML = `
+        ${aiCardHtml}
         <div class="card mb-3"><div class="card-body d-flex flex-wrap gap-4 align-items-center">
           <div><div class="muted small">RFQ</div><div class="fw-semibold">${rfq.rfqNumber} — ${VB.escape(rfq.title)}</div></div>
           <div><div class="muted small">Quantity</div><div class="fw-semibold">${rfq.quantity} ${VB.escape(rfq.unit || '')}</div></div>
@@ -857,7 +1007,10 @@ const App = {
       this.view(`
         <div class="table-toolbar">
           <input class="form-control search" id="poSearch" placeholder="🔍 Search PO..." oninput="App.filterPOs()" />
-          <div class="ms-auto">${canManage ? '<button class="btn btn-primary" onclick="App.generatePOModal()"><i class="bi bi-plus-lg"></i> Generate PO</button>' : ''}</div>
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-outline-success" onclick="App.exportCSV('pos.csv', App.state.pos)"><i class="bi bi-file-earmark-spreadsheet"></i> Export</button>
+            ${canManage ? '<button class="btn btn-primary" onclick="App.generatePOModal()"><i class="bi bi-plus-lg"></i> Generate PO</button>' : ''}
+          </div>
         </div>
         <div class="table-wrap"><table class="table align-middle"><thead><tr>
           <th>PO #</th><th>Vendor</th><th>RFQ</th><th>Product</th><th>Qty</th><th>GST</th><th>Total (₹)</th><th>Status</th><th class="text-end">Actions</th>
