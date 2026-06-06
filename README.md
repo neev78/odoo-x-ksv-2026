@@ -1,4 +1,4 @@
-[open vendor bridge](https://vendor-bridge-mps1.onrender.com)
+[Click here to open vendor bridge](https://vendor-bridge-mps1.onrender.com)
 
 # 🏢 VENDOR BRIDGE
 
